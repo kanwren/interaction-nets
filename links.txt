@@ -1,2 +1,3 @@
 Lafont (POPL '90): https://dl.acm.org/doi/pdf/10.1145/96709.96718
 Interaction Combinators (Lafont '97): https://www.sciencedirect.com/science/article/pii/S0890540197926432?via%3Dihub
+Models of Computation: https://github.com/cicada-lang/inet/blob/master/docs/books/models-of-computation--maribel-fern%C3%A1ndez.pdf
