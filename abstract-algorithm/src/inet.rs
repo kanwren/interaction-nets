@@ -1,8 +1,14 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ghost_cell::{GhostCell, GhostToken};
 
 use crate::lambda::Term;
+
+macro_rules! debug_println {
+    ($($arg:tt)*) => (#[cfg(debug_print)] println!($($arg)*));
+}
 
 /// | Agent | Port 1 (principal) | Port 2 | Port 3 |
 /// |-------|--------------------|--------|--------|
@@ -43,15 +49,21 @@ pub type PortRef<'id, 'a> = (&'a AgentRef<'id>, usize);
 const MAX_PORTS: usize = 3;
 pub type AgentRef<'id> = Arc<GhostCell<'id, Agent<'id>>>;
 
+type AgentId = usize;
+static AGENT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
+fn new_agent_id() -> AgentId { AGENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed) }
+
 pub struct Agent<'id> {
     pub agent_type: AgentType,
     pub ports: [Option<Port<'id>>; MAX_PORTS],
+    id: AgentId,
 }
 
 impl<'id> Agent<'id> {
     pub fn new(agent_type: AgentType) -> Self {
         Agent {
             agent_type,
+            id: new_agent_id(),
             ports: Default::default(),
         }
     }
@@ -62,6 +74,7 @@ impl<'id> Agent<'id> {
         token: &'a mut GhostToken<'id>,
         port: PortRef<'id, 'a>,
     ) -> Option<Port<'id>> {
+        debug_println!("unlinking: ({:?}, {:?})", port.0.borrow(token).agent_type, port.1);
         port.0.borrow_mut(token).ports[port.1].take()
     }
 
@@ -92,6 +105,7 @@ impl<'id> Agent<'id> {
         p1: PortRef<'id, 'a>,
         p2: PortRef<'id, 'a>,
     ) {
+        debug_println!("linking: ({:?}, {:?}) to ({:?}, {:?})", p1.0.borrow(token).agent_type, p1.1, p2.0.borrow(token).agent_type, p2.1);
         p1.0.borrow_mut(token).ports[p1.1] = Some((Arc::clone(p2.0), p2.1));
     }
 
@@ -211,20 +225,23 @@ impl<'id> INet<'id> {
         ) {
             match term {
                 Term::Lam(body) => {
+                    debug_println!("translating lambda: {:?}", term);
                     let λ = new_agent(AgentType::Γ(ΓTag::Λ));
                     Agent::unsafe_link(token, (&λ, 0), parent_port);
                     // the argument should be unused by default
                     let ε = new_agent(AgentType::Ε);
                     Agent::unsafe_link(token, (&λ, 1), (&ε, 0));
-                    go(token, body, &scope.append((&λ, 0)), (&λ, 2), δ_tag);
+                    go(token, body, &scope.append((&λ, 1)), (&λ, 2), δ_tag);
                 }
                 Term::App(f, x) => {
+                    debug_println!("translating application: {:?}", term);
                     let app = new_agent(AgentType::Γ(ΓTag::Α));
                     Agent::unsafe_link(token, (&app, 2), parent_port);
                     go(token, f, scope, (&app, 0), δ_tag);
                     go(token, x, scope, (&app, 1), δ_tag);
                 }
                 Term::Var(n) => {
+                    debug_println!("translating var: {:?}", term);
                     // bounds sanity check: scope with index 0 has length 1; if scope has length 0,
                     // then we don't have variable 0
                     if scope.len() <= *n {
@@ -262,5 +279,85 @@ impl<'id> INet<'id> {
         let root = Arc::new(GhostCell::new(Agent::new(AgentType::Root)));
         go(token, term, &ConsList::new(), (&root, 1), &mut δ_tag);
         INet { root }
+    }
+
+    pub fn to_lambda(token: &GhostToken<'id>, net: &Self) -> Term {
+        use cons_list::ConsList;
+        fn go<'id, 'a>(
+            token: &'a GhostToken<'id>,
+            port: PortRef<'id, 'a>,
+            depth: usize,
+            depth_map: &mut HashMap<AgentId, usize>,
+            exit: &ConsList<usize>,
+        ) -> Term {
+            let agent = port.0.borrow(token);
+            if !depth_map.contains_key(&agent.id) {
+                depth_map.insert(agent.id, depth);
+            }
+            match agent.agent_type {
+                AgentType::Root => {
+                    if port.1 == 1 {
+                        if let Some((ref target, target_port_num)) = agent.ports[1] {
+                            go(token, (target, target_port_num), depth, depth_map, exit)
+                        } else {
+                            panic!("encountered empty root while translating inet to lambda");
+                        }
+                    } else {
+                        panic!("visited invalid port of root while translating inet to lambda");
+                    }
+                },
+                AgentType::Γ(ΓTag::Λ) => {
+                    if port.1 == 0 {
+                        // first visit - visit body next
+                        if let Some((ref body, body_port_num)) = agent.ports[2] {
+                            let res = go(token, (body, body_port_num), depth + 1, depth_map, exit);
+                            Term::Lam(Box::new(res))
+                        } else {
+                            panic!("λ agent missing a body while translating inet to lambda - this should not be possible");
+                        }
+                    } else if port.1 == 1 {
+                        // variable
+                        let first_depth: usize = *depth_map.get(&agent.id).expect("depth map missing inserted agent id while translating inet to lambda");
+                        Term::Var(depth - first_depth - 1)
+                    } else {
+                        panic!("port 2 of a λ agent visited while translating inet to lambda - this should not be possible");
+                    }
+                },
+                AgentType::Γ(ΓTag::Α) => {
+                    if port.1 == 2 {
+                        if let Some((ref f, f_port_num)) = agent.ports[0] {
+                            if let Some((ref x, x_port_num)) = agent.ports[1] {
+                                let f_term = go(token, (f, f_port_num), depth, depth_map, exit);
+                                let x_term = go(token, (x, x_port_num), depth, depth_map, exit);
+                                Term::App(Box::new(f_term), Box::new(x_term))
+                            } else {
+                                panic!("α agent missing an argument while translating inet to lambda - this should not be possible");
+                            }
+                        } else {
+                            panic!("α agent missing a function while translating inet to lambda - this should not be possible");
+                        }
+                    } else {
+                        panic!("visited an invalid port of α agent while translating inet to lambda - this should not be possible");
+                    }
+                },
+                AgentType::Δ(_) => {
+                    let (next_port, new_exit) = if port.1 == 0 {
+                        let next_port = *exit.head().expect("visited the principal of a δ agent before visiting the children - this should not be possible");
+                        (next_port, exit.tail())
+                    } else {
+                        (0, exit.append(port.1))
+                    };
+                    if let Some((ref next_port, next_port_num)) = agent.ports[next_port] {
+                        go(token, (next_port, next_port_num), depth, depth_map, &new_exit)
+                    } else {
+                        panic!("δ agent missing an argument while translating inet to lambda - this should not be possible");
+                    }
+                },
+                AgentType::Ε => {
+                    panic!("ε agent visited when translating inet to lambda - this should not be possible");
+                },
+            }
+        }
+        go(token, (&net.root, 1), 0, &mut HashMap::new(), &ConsList::new())
     }
 }
