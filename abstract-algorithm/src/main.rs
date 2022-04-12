@@ -17,6 +17,6 @@ fn main() {
                 Err(e) => println!("no debruijn form: {}", e),
                 Ok(x) => println!("{}", x),
             }
-        },
+        }
     }
 }

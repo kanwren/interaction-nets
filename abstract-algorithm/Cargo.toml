@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+cons-list = "0.0.3"
 ghost-cell = "0.2.2"
 nom = "7.1.1"
