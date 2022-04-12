@@ -1,19 +1,21 @@
 use std::sync::Arc;
 
-use crate::ghost::{GhostCell, GhostToken};
+use ghost_cell::{GhostCell, GhostToken};
 
-pub struct INet<'id> {
-    root: Agent<'id>,
-}
+use crate::lambda::Term;
 
-/// | Agent | Port 1 | Port 2 | Port 3 |
-/// |-------|--------|--------|--------|
-/// | Γ(Λ)  | result | arg    | body   |
-/// | Γ(Α)  | func   | arg    | result |
-/// | Δ     | arg    | left   | right  |
-/// | Ε     | target | n/a    | n/a    |
+/// | Agent | Port 1 (principal) | Port 2 | Port 3 |
+/// |-------|--------------------|--------|--------|
+/// | Γ(Λ)  | result             | arg    | body   |
+/// | Γ(Α)  | func               | arg    | result |
+/// | Δ     | arg                | left   | right  |
+/// | Ε     | target             | n/a    | n/a    |
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum AgentType {
+    /// The root of the evaluation tree. There should only ever be one of these agents. The root
+    /// should not interact with any other nodes; that is, it should have no principal port, and
+    /// port 2 is used instead.
+    Root,
     /// The γ agent, which functions both as λ and α when translating lambda calculus.
     Γ(ΓTag),
     /// The δ agent, which is used to duplicate lambda arguments that are used more than once.
@@ -170,4 +172,8 @@ impl<'id> Agent<'id> {
         // SAFETY: (a2, 2) is unlinked by default.
         Agent::unsafe_link(token, (&b2, 2), (&a2, 2));
     }
+}
+
+pub struct INet<'id> {
+    root: Agent<'id>,
 }

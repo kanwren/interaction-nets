@@ -1,4 +1,3 @@
-pub mod ghost;
 pub mod inet;
 pub mod lambda;
 
