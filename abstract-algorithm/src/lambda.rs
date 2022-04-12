@@ -27,7 +27,7 @@ impl NamedTerm {
                 map(identifier, NamedTerm::Var)(i)
             }
             fn lambda(i: &str) -> IResult<&str, NamedTerm> {
-                let (i, _) = char('λ')(i)?;
+                let (i, _) = one_of("λ\\")(i)?;
                 let (i, name) = preceded(multispace0, identifier)(i)?;
                 let (i, _) = preceded(multispace0, char('.'))(i)?;
                 let (i, body) = preceded(multispace0, named_term)(i)?;
@@ -225,7 +225,7 @@ impl Term {
                 })(i)
             }
             fn lambda(i: &str) -> IResult<&str, Term> {
-                let (i, _) = char('λ')(i)?;
+                let (i, _) = one_of("λ\\")(i)?;
                 let (i, body) = preceded(multispace0, term)(i)?;
                 Ok((i, Term::Lam(Box::new(body))))
             }
