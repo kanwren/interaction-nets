@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use ghost_cell::{GhostCell, GhostToken};
 
@@ -44,28 +44,42 @@ pub enum ΓTag {
 }
 
 // TODO: model this without unsafe indexing
-pub type Port<'id> = (AgentRef<'id>, usize);
-pub type PortRef<'id, 'a> = (&'a AgentRef<'id>, usize);
+type Port<'id> = (AgentRef<'id>, usize);
+type PortRef<'id, 'a> = (&'a AgentRef<'id>, usize);
 const MAX_PORTS: usize = 3;
-pub type AgentRef<'id> = Arc<GhostCell<'id, Agent<'id>>>;
+type AgentRef<'id> = Arc<GhostCell<'id, Agent<'id>>>;
 
-type AgentId = usize;
-static AGENT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
-fn new_agent_id() -> AgentId { AGENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed) }
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+struct AgentId(usize);
 
-pub struct Agent<'id> {
-    pub agent_type: AgentType,
-    pub ports: [Option<Port<'id>>; MAX_PORTS],
+impl AgentId {
+    fn new() -> Self {
+        static AGENT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
+        AgentId(AGENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+struct Agent<'id> {
+    agent_type: AgentType,
+    ports: [Option<Port<'id>>; MAX_PORTS],
     id: AgentId,
 }
 
 impl<'id> Agent<'id> {
-    pub fn new(agent_type: AgentType) -> Self {
+    fn new(agent_type: AgentType) -> Self {
         Agent {
             agent_type,
-            id: new_agent_id(),
+            id: AgentId::new(),
             ports: Default::default(),
         }
+    }
+
+    fn new_ref(agent_type: AgentType) -> AgentRef<'id> {
+        Arc::new(GhostCell::new(Agent::new(agent_type)))
+    }
+
+    fn target<'a>(&'a self, port_num: usize) -> Option<(&'a AgentRef<'id>, usize)> {
+        self.ports[port_num].as_ref().map(|t| (&t.0, t.1))
     }
 
     /// Like [unlink], but unidirectional. Returns the old port. Assumes that the old
@@ -74,12 +88,16 @@ impl<'id> Agent<'id> {
         token: &'a mut GhostToken<'id>,
         port: PortRef<'id, 'a>,
     ) -> Option<Port<'id>> {
-        debug_println!("unlinking: ({:?}, {:?})", port.0.borrow(token).agent_type, port.1);
+        debug_println!(
+            "unlinking: ({:?}, {:?})",
+            port.0.borrow(token).agent_type,
+            port.1
+        );
         port.0.borrow_mut(token).ports[port.1].take()
     }
 
     /// Unlink the port of the given agent and its target
-    pub fn unlink<'a>(
+    fn unlink<'a>(
         token: &'a mut GhostToken<'id>,
         port: PortRef<'id, 'a>,
     ) -> (Option<Port<'id>>, Option<Port<'id>>) {
@@ -91,102 +109,93 @@ impl<'id> Agent<'id> {
         }
     }
 
-    /// Link the two agents at the specified ports. Note that the old targets of these ports are
-    /// unlinked.
-    pub fn link<'a>(token: &'a mut GhostToken<'id>, p1: PortRef<'id, 'a>, p2: PortRef<'id, 'a>) {
-        Agent::unlink(token, p1);
-        Agent::unlink(token, p2);
-        Agent::unsafe_link(token, p1, p2);
-    }
-
-    /// Link port `p1` to port `p2`, but not the other way around.
-    pub fn unsafe_uni_link<'a>(
-        token: &'a mut GhostToken<'id>,
-        p1: PortRef<'id, 'a>,
-        p2: PortRef<'id, 'a>,
-    ) {
-        debug_println!("linking: ({:?}, {:?}) to ({:?}, {:?})", p1.0.borrow(token).agent_type, p1.1, p2.0.borrow(token).agent_type, p2.1);
-        p1.0.borrow_mut(token).ports[p1.1] = Some((Arc::clone(p2.0), p2.1));
-    }
-
     /// Link the two agents at the specified ports, but do not unlink the ports first. If the ports
     /// hvae old targets and they are not relinked afterwards, behavior is undefined.
-    pub fn unsafe_link<'a>(
-        token: &'a mut GhostToken<'id>,
-        p1: PortRef<'id, 'a>,
-        p2: PortRef<'id, 'a>,
-    ) {
-        Agent::unsafe_uni_link(token, p1, p2);
-        Agent::unsafe_uni_link(token, p2, p1);
+    fn unsafe_link<'a>(token: &'a mut GhostToken<'id>, p1: PortRef<'id, 'a>, p2: PortRef<'id, 'a>) {
+        debug_println!(
+            "linking: ({:?}, {:?}) to ({:?}, {:?})",
+            p1.0.borrow(token).agent_type,
+            p1.1,
+            p2.0.borrow(token).agent_type,
+            p2.1
+        );
+        p1.0.borrow_mut(token).ports[p1.1] = Some((Arc::clone(p2.0), p2.1));
+        p2.0.borrow_mut(token).ports[p2.1] = Some((Arc::clone(p1.0), p1.1));
     }
 
-    /// Unlinks the given ports and links their old targets together.
-    pub fn relink<'a>(token: &'a mut GhostToken<'id>, p1: PortRef<'id, 'a>, p2: PortRef<'id, 'a>) {
-        // SAFETY: p1 and p2 point to the two ports which will be relinked together
-        let a_dest: Option<Port<'id>> = Agent::unsafe_take(token, p1);
-        let b_dest: Option<Port<'id>> = Agent::unsafe_take(token, p2);
-        if let Some(a_dest1) = a_dest {
-            if let Some(b_dest1) = b_dest {
-                // SAFETY: a_dest and b_dest used to be linked to p1 and p2, which we already
-                // unlinked above.
-                Agent::unsafe_link(token, (&a_dest1.0, a_dest1.1), (&b_dest1.0, b_dest1.1));
-            } else {
-                Agent::unlink(token, (&a_dest1.0, a_dest1.1));
-            }
-        } else if let Some(b_dest1) = b_dest {
-            Agent::unlink(token, (&b_dest1.0, b_dest1.1));
+    /// Unlink all ports of an agent and destroy it
+    fn destroy<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>) {
+        for i in 0..MAX_PORTS {
+            Agent::unlink(token, (a, i));
         }
     }
 
-    // Apply the annihilation rule to two nodes of the same type that both have arity 2 (in
-    // particular, γ and δ) interacting at their principal ports.
-    // Does not check these preconditions! This should be used as a helper in interactions only.
-    fn unsafe_annihilate2<'a>(
+    /// Link `p1` to the target of `p2`, unlinking `p2` in the process. You must verify that the
+    /// old target of `p1` is unlinked.
+    fn unsafe_link_to_target_of<'a>(
         token: &'a mut GhostToken<'id>,
-        a: &'a AgentRef<'id>,
-        b: &'a AgentRef<'id>,
+        p1: PortRef<'id, 'a>,
+        p2: PortRef<'id, 'a>,
     ) {
-        Agent::unlink(token, (a, 0)); // unlink BOTH principal ports (for GC reasons)
-        Agent::relink(token, (a, 1), (b, 1));
-        Agent::relink(token, (a, 2), (b, 2));
-        // all ports on a, b should be unlinked
+        // SAFETY: `p2_target` is relinked in the next line.
+        if let Some(p2_target) = Agent::unsafe_take(token, p2) {
+            Agent::unsafe_link(token, p1, (&p2_target.0, p2_target.1));
+        } else {
+            Agent::unsafe_take(token, p1);
+        }
     }
 
-    // Apply the commuting rule to two nodes of different types that both have arity 2 (in
-    // particular, γ and δ) interacting at their principal ports.
-    // Does not check these preconditions! This should be used as a helper in interactions only.
-    fn commute2<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>, b: &'a AgentRef<'id>) {
-        // link p1 to the target of p2, unlinking p2 in the process
-        fn unsafe_link_to_target_of<'id, 'a>(
+    /// Apply the annihilation rule to two nodes of the same type that both have arity 2 (in
+    /// particular, γ and δ) interacting at their principal ports. Does not check these
+    /// preconditions! This should be used as a helper in interactions only.
+    fn annihilate2<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>, b: &'a AgentRef<'id>) {
+        fn relink<'id, 'a>(
             token: &'a mut GhostToken<'id>,
             p1: PortRef<'id, 'a>,
             p2: PortRef<'id, 'a>,
         ) {
-            // SAFETY: `p2_target` is relinked in the next line.
-            if let Some(p2_target) = Agent::unsafe_take(token, p2) {
-                Agent::unsafe_link(token, p1, (&p2_target.0, p2_target.1));
-            } else {
-                // SAFETY: each case must be verified below.
-                Agent::unsafe_take(token, p1);
+            // SAFETY: p1 and p2 point to the two ports which will be relinked together
+            let a_dest: Option<Port<'id>> = Agent::unsafe_take(token, p1);
+            let b_dest: Option<Port<'id>> = Agent::unsafe_take(token, p2);
+            if let Some(a_dest1) = a_dest {
+                if let Some(b_dest1) = b_dest {
+                    // SAFETY: a_dest and b_dest used to be linked to p1 and p2, which we already
+                    // unlinked above.
+                    Agent::unsafe_link(token, (&a_dest1.0, a_dest1.1), (&b_dest1.0, b_dest1.1));
+                } else {
+                    Agent::unlink(token, (&a_dest1.0, a_dest1.1));
+                }
+            } else if let Some(b_dest1) = b_dest {
+                Agent::unlink(token, (&b_dest1.0, b_dest1.1));
             }
         }
-        let a2: AgentRef = Arc::new(GhostCell::new(Agent::new(a.borrow(token).agent_type)));
-        let b2: AgentRef = Arc::new(GhostCell::new(Agent::new(b.borrow(token).agent_type)));
+        Agent::unlink(token, (a, 0)); // unlink BOTH principal ports (for GC reasons)
+        relink(token, (a, 1), (b, 1));
+        relink(token, (a, 2), (b, 2));
+        // all ports on a, b should be unlinked
+    }
+
+    /// Apply the commuting rule to two nodes of different types that both have arity 2 (in
+    /// particular, γ and δ) interacting at their principal ports. Does not check these
+    /// preconditions! This should be used as a helper in interactions only.
+    fn commute2<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>, b: &'a AgentRef<'id>) {
+        let a2: AgentRef = Agent::new_ref(a.borrow(token).agent_type);
+        let b2: AgentRef = Agent::new_ref(b.borrow(token).agent_type);
         // SAFETY: (b, 0) used to be linked to (a, 0), which is relinked in line 2.
         // SAFETY: target of (a, 1) used to be linked to (a, 1), which is unlinked here and relinked in line 3.
-        unsafe_link_to_target_of(token, (b, 0), (a, 1));
+        Agent::unsafe_link_to_target_of(token, (b, 0), (a, 1));
         // SAFETY: (a, 0) used to be linked to (b, 0), which was relinked in line 1.
         // SAFETY: target of (b, 1) used to be linked to (b, 1), which is unlinked here and relinked in line 3.
-        unsafe_link_to_target_of(token, (a, 0), (b, 1));
+        Agent::unsafe_link_to_target_of(token, (a, 0), (b, 1));
         // SAFETY: (b, 1) was unlinked in line 2.
         // SAFETY: (a, 1) was unlinked in line 1
         Agent::unsafe_link(token, (b, 1), (a, 1));
         // SAFETY: (b2, 0) is unlinked by default.
         // SAFETY: target of (a, 2) used to be linked to (a, 2), which is unlinked here and relinked in line 6.
-        unsafe_link_to_target_of(token, (&b2, 0), (a, 2));
+        Agent::unsafe_link_to_target_of(token, (&b2, 0), (a, 2));
         // SAFETY: (a2, 0) is unlinked by default.
         // SAFETY: target of (b, 2) used to be linked to (b, 2), which is unlinked here and relinked in line 6.
-        unsafe_link_to_target_of(token, (&a2, 0), (b, 2));
+        Agent::unsafe_link_to_target_of(token, (&a2, 0), (b, 2));
         // SAFETY: (a, 2) is unlinked in line 4.
         // SAFETY: (b2, 1) is unlinked by default.
         Agent::unsafe_link(token, (a, 2), (&b2, 1));
@@ -198,10 +207,54 @@ impl<'id> Agent<'id> {
         Agent::unsafe_link(token, (&b2, 2), (&a2, 2));
     }
 
-    /// Unlink all ports of an agent and destroy it
-    pub fn destroy<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>) {
-        for i in 0..MAX_PORTS {
-            Agent::unlink(token, (a, i));
+    /// Applies the erasing rule on an arity-2 agent interacting with an ε agent at its principal
+    /// port. Assumes that that exactly one of the nodes is an ε agent, and that they are already
+    /// connected.
+    fn erase2<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>, b: &'a AgentRef<'id>) {
+        let (erase, target) = if a.borrow(token).agent_type == AgentType::Ε {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        Agent::unlink(token, (erase, 0)); // should also unlink target's principal port
+        let erase2 = Agent::new_ref(AgentType::Ε);
+        // SAFETY: (erase_node, 0) is unlinked
+        Agent::unsafe_link_to_target_of(token, (erase, 0), (target, 1));
+        // SAFETY: (erase_node_2, 0) is unlinked
+        Agent::unsafe_link_to_target_of(token, (&erase2, 0), (target, 2));
+    }
+
+    /// Apply an interaction rule to two nodes connected at their principal ports
+    fn interact_pair<'a>(
+        token: &'a mut GhostToken<'id>,
+        a: &'a AgentRef<'id>,
+        b: &'a AgentRef<'id>,
+    ) {
+        let a_type = a.borrow(token).agent_type;
+        let b_type = b.borrow(token).agent_type;
+        match (a_type, b_type) {
+            // root nodes cannot interact, since they have no principal port
+            (AgentType::Root, _) => panic!("attempted to interact with a root node"),
+            (_, AgentType::Root) => panic!("attempted to interact with a root node"),
+            // common agents annihilate
+            (AgentType::Γ(_), AgentType::Γ(_)) => Agent::annihilate2(token, a, b),
+            (AgentType::Δ(m), AgentType::Δ(n)) => {
+                if m == n {
+                    Agent::annihilate2(token, a, b)
+                } else {
+                    Agent::commute2(token, a, b)
+                }
+            }
+            (AgentType::Ε, AgentType::Ε) => {
+                Agent::destroy(token, a);
+                Agent::destroy(token, b)
+            }
+            // γ and δ commute past each other
+            (AgentType::Γ(_), AgentType::Δ(_)) => Agent::commute2(token, a, b),
+            (AgentType::Δ(_), AgentType::Γ(_)) => Agent::commute2(token, a, b),
+            // ε erases
+            (AgentType::Γ(_) | AgentType::Δ(_), AgentType::Ε) => Agent::erase2(token, a, b),
+            (AgentType::Ε, AgentType::Γ(_) | AgentType::Δ(_)) => Agent::erase2(token, b, a),
         }
     }
 }
@@ -211,7 +264,7 @@ pub struct INet<'id> {
 }
 
 impl<'id> INet<'id> {
-    pub fn from_lambda(token: &mut GhostToken<'id>, term: &Term) -> Self {
+    pub fn compile(token: &mut GhostToken<'id>, term: &Term) -> Self {
         use cons_list::ConsList;
         fn new_agent<'id>(agent_type: AgentType) -> AgentRef<'id> {
             Arc::new(GhostCell::new(Agent::new(agent_type)))
@@ -250,11 +303,11 @@ impl<'id> INet<'id> {
                     let λ: PortRef<'id, '_> = *scope.iter().nth(*n).unwrap();
                     // SAFETY: the lambda's variable is always initialized to an ε-node to start
                     // with.
-                    let (target, target_port_num) = Agent::unsafe_take(token, λ).unwrap();
-                    if matches!(target.borrow(token).agent_type, AgentType::Ε) {
+                    let target = Agent::unsafe_take(token, λ).unwrap();
+                    if matches!(target.0.borrow(token).agent_type, AgentType::Ε) {
                         // SAFETY: abs is relinked in the next line
                         // unlink the epsilon and GC it
-                        Agent::unsafe_take(token, (&target, target_port_num));
+                        Agent::unsafe_take(token, (&target.0, target.1));
                         // SAFETY: parent port is unlinked
                         Agent::unsafe_link(token, λ, parent_port);
                     } else {
@@ -270,7 +323,7 @@ impl<'id> INet<'id> {
                         // SAFETY: (dup, 2) is unlinked by default
                         // SAFETY: target_port used to point to abs, which was relinked
                         // link the old usage to the dup
-                        Agent::unsafe_link(token, (&δ, 2), (&target, target_port_num));
+                        Agent::unsafe_link(token, (&δ, 2), (&target.0, target.1));
                     }
                 }
             }
@@ -281,7 +334,7 @@ impl<'id> INet<'id> {
         INet { root }
     }
 
-    pub fn to_lambda(token: &GhostToken<'id>, net: &Self) -> Term {
+    pub fn decompile(&self, token: &GhostToken<'id>) -> Term {
         use cons_list::ConsList;
         fn go<'id, 'a>(
             token: &'a GhostToken<'id>,
@@ -291,73 +344,89 @@ impl<'id> INet<'id> {
             exit: &ConsList<usize>,
         ) -> Term {
             let agent = port.0.borrow(token);
-            if !depth_map.contains_key(&agent.id) {
-                depth_map.insert(agent.id, depth);
-            }
+            depth_map.entry(agent.id).or_insert(depth);
             match agent.agent_type {
                 AgentType::Root => {
                     if port.1 == 1 {
-                        if let Some((ref target, target_port_num)) = agent.ports[1] {
-                            go(token, (target, target_port_num), depth, depth_map, exit)
-                        } else {
-                            panic!("encountered empty root while translating inet to lambda");
-                        }
+                        let target = agent
+                            .target(1)
+                            .expect("encountered empty root while translating inet to lambda");
+                        go(token, target, depth, depth_map, exit)
                     } else {
                         panic!("visited invalid port of root while translating inet to lambda");
                     }
-                },
+                }
                 AgentType::Γ(ΓTag::Λ) => {
                     if port.1 == 0 {
                         // first visit - visit body next
-                        if let Some((ref body, body_port_num)) = agent.ports[2] {
-                            let res = go(token, (body, body_port_num), depth + 1, depth_map, exit);
-                            Term::Lam(Box::new(res))
-                        } else {
-                            panic!("λ agent missing a body while translating inet to lambda - this should not be possible");
-                        }
+                        let body = agent
+                            .target(2)
+                            .expect("λ agent missing a body while translating inet to lambda");
+                        let res = go(token, body, depth + 1, depth_map, exit);
+                        Term::Lam(Box::new(res))
                     } else if port.1 == 1 {
                         // variable
-                        let first_depth: usize = *depth_map.get(&agent.id).expect("depth map missing inserted agent id while translating inet to lambda");
+                        let first_depth: usize = *depth_map.get(&agent.id).expect(
+                            "depth map missing inserted agent id while translating inet to lambda",
+                        );
                         Term::Var(depth - first_depth - 1)
                     } else {
-                        panic!("port 2 of a λ agent visited while translating inet to lambda - this should not be possible");
+                        panic!("port 2 of a λ agent visited while translating inet to lambda");
                     }
-                },
+                }
                 AgentType::Γ(ΓTag::Α) => {
                     if port.1 == 2 {
-                        if let Some((ref f, f_port_num)) = agent.ports[0] {
-                            if let Some((ref x, x_port_num)) = agent.ports[1] {
-                                let f_term = go(token, (f, f_port_num), depth, depth_map, exit);
-                                let x_term = go(token, (x, x_port_num), depth, depth_map, exit);
-                                Term::App(Box::new(f_term), Box::new(x_term))
-                            } else {
-                                panic!("α agent missing an argument while translating inet to lambda - this should not be possible");
-                            }
-                        } else {
-                            panic!("α agent missing a function while translating inet to lambda - this should not be possible");
-                        }
+                        let f = agent
+                            .target(0)
+                            .expect("α agent missing a function while translating inet to lambda");
+                        let x = agent
+                            .target(1)
+                            .expect("α agent missing an argument while translating inet to lambda");
+                        let f_term = go(token, f, depth, depth_map, exit);
+                        let x_term = go(token, x, depth, depth_map, exit);
+                        Term::App(Box::new(f_term), Box::new(x_term))
                     } else {
-                        panic!("visited an invalid port of α agent while translating inet to lambda - this should not be possible");
+                        panic!(
+                            "visited an invalid port of α agent while translating inet to lambda"
+                        );
                     }
-                },
+                }
                 AgentType::Δ(_) => {
-                    let (next_port, new_exit) = if port.1 == 0 {
-                        let next_port = *exit.head().expect("visited the principal of a δ agent before visiting the children - this should not be possible");
-                        (next_port, exit.tail())
+                    let (next_port_num, new_exit) = if port.1 == 0 {
+                        let next_port_num = *exit.head().expect(
+                            "visited the principal of a δ agent before visiting the children",
+                        );
+                        (next_port_num, exit.tail())
                     } else {
                         (0, exit.append(port.1))
                     };
-                    if let Some((ref next_port, next_port_num)) = agent.ports[next_port] {
-                        go(token, (next_port, next_port_num), depth, depth_map, &new_exit)
-                    } else {
-                        panic!("δ agent missing an argument while translating inet to lambda - this should not be possible");
-                    }
-                },
+                    let next_port = agent
+                        .target(next_port_num)
+                        .expect("δ agent missing an argument while translating inet to lambda");
+                    go(token, next_port, depth, depth_map, &new_exit)
+                }
                 AgentType::Ε => {
-                    panic!("ε agent visited when translating inet to lambda - this should not be possible");
-                },
+                    panic!("ε agent visited when translating inet to lambda");
+                }
             }
         }
-        go(token, (&net.root, 1), 0, &mut HashMap::new(), &ConsList::new())
+        go(
+            token,
+            (&self.root, 1),
+            0,
+            &mut HashMap::new(),
+            &ConsList::new(),
+        )
     }
+
+    fn reduce(&self, token: &mut GhostToken<'id>) {
+    }
+}
+
+pub fn reduce_lambda(term: &Term) -> Term {
+    GhostToken::new(|mut token| {
+        let net = INet::compile(&mut token, term);
+        net.reduce(&mut token);
+        net.decompile(&token)
+    })
 }

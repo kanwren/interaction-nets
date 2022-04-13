@@ -1,7 +1,3 @@
-use ghost_cell::GhostToken;
-
-use crate::inet::INet;
-
 pub mod inet;
 pub mod lambda;
 
@@ -21,12 +17,8 @@ fn main() {
                 Err(e) => println!("no debruijn form: {}", e),
                 Ok(x) => {
                     println!("debruijn form:\t{}", x);
-                    GhostToken::new(|mut token| {
-                        let net = INet::from_lambda(&mut token, &x);
-                        let lam = INet::to_lambda(&token, &net);
-                        println!("inet roundtrip:\t{}", lam);
-                    });
-                },
+                    println!("reduced form:\t{}", inet::reduce_lambda(&x));
+                }
             }
         }
     }
