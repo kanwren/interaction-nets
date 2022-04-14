@@ -28,10 +28,14 @@ impl NamedTerm {
             }
             fn lambda(i: &str) -> IResult<&str, NamedTerm> {
                 let (i, _) = one_of("λ\\")(i)?;
-                let (i, name) = preceded(multispace0, identifier)(i)?;
+                let (i, names) = many1(preceded(multispace0, identifier))(i)?;
                 let (i, _) = preceded(multispace0, char('.'))(i)?;
                 let (i, body) = preceded(multispace0, named_term)(i)?;
-                Ok((i, NamedTerm::Lam(name, Box::new(body))))
+                let mut res = body;
+                for name in names.into_iter().rev() {
+                    res = NamedTerm::Lam(name, Box::new(res));
+                }
+                Ok((i, res))
             }
             fn parens(i: &str) -> IResult<&str, NamedTerm> {
                 delimited(
@@ -151,7 +155,13 @@ impl std::fmt::Display for NamedTerm {
                     if prec > 0 {
                         write!(f, "(")?;
                     }
-                    write!(f, "λ{}. ", name)?;
+                    write!(f, "λ{}", name)?;
+                    let mut body = &**body;
+                    while let NamedTerm::Lam(name, new_body) = body {
+                        write!(f, " {}", name)?;
+                        body = new_body;
+                    }
+                    write!(f, ". ")?;
                     fmt_at(f, body, 0)?;
                     if prec > 0 {
                         write!(f, ")")?;
