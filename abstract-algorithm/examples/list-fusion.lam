@@ -1,0 +1,32 @@
+let inc = \n f x. f (n f x);
+
+let cons = \h t c n. c h (t c n);
+let nil = \c n. n;
+
+let map = \f xs c n. xs (\h t. c (f h) t) n;
+let map_bad = \f xs. xs (\h t. cons (f h) t) nil; // this wouldn't fuse
+
+let c = \f g x. f (g x); // function composition
+let cn = \n f. n (\g. c f g) (\x. x); // cn n f is f composed with itself n times
+
+cn #3 (map inc)
+
+// the result will be this (up to alpha equivalence):
+//
+//   λxs cons nil. xs (λh t. cons (λf x. f (f (f (h f x)))) t) nil
+//
+// which is equivalent to `map (λn. (λf x. f (f (f (n f x)))))`, or more
+// concisely `map (λn. inc (inc (inc n)))`.
+//
+// notice how the triple inc gets combined in the middle, and the extra maps are
+// elided! so
+//
+//   map inc . map inc . map inc
+//   ==> map (inc . inc . inc)
+//
+// and we get the fusion for free.
+//
+// this applies to other list functions, too; if we combine `map`s, `fold`s, and
+// so on, the whole composition would still be fused into a single
+// traversal for free.
+

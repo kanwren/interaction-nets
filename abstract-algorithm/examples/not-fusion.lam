@@ -1,0 +1,37 @@
+let true = \x y. x;
+let false = \x y. y;
+let not = \b x y. b y x;
+let not_bad = \b. b false true; // this wouldn't fuse, since the normal form doesn't keep constant space on composition
+
+let c = \f g x. f (g x); // function composition
+let c2n = \n f. n (\f. c f f) f; // c2n n f is f composed with itself 2^n times
+
+let n = #100;
+c2n n not true
+
+// try varying `n` and seeing how many beta reductions it takes. interestingly,
+// it grows _linearly_ in `n`, which seems to not make any sense, because we're
+// applying the function `2^n` times, so the runtime is growing logarithmically
+// in the number of times we apply `not`.
+//
+// the key to this is the fusion; check the output of `λx. not (not x)`. even if
+// you add more `not`s, the normal form does not grow (this is not the case with
+// `not_bad` above!). the interaction net is able to perform the reduction
+// inside of the lambda, and share that reduction optimally among subterms.
+//
+// the seemingly impossible logarithmic growth comes from the way we composed
+// the function together. if we had truly applied `not` 2^n times, we would have
+// to do that many beta reductions, even if the normal form does not grow.
+// however, `c2n` really does this:
+//
+//   let not2 = c not not;
+//   let not4 = c not2 not2;
+//   let not8 = c not4 not4;
+//   ...
+//   not128 true
+//
+// since the interaction net can evaluate inside of the lambdas and share the
+// result, the first `not2` will be realized as the identity function, and those
+// results can be shared without extra reductions to `not4` and so on. as a
+// result, each additional step only adds the overhead of a single identity
+// function composition, and thus the growth.
