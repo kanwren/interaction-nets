@@ -1,14 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ghost_cell::{GhostCell, GhostToken};
 
-use crate::lambda::Term;
-
-macro_rules! debug_println {
-    ($($arg:tt)*) => (#[cfg(debug_print)] println!($($arg)*));
-}
+use crate::lambda::DebruijnTerm;
 
 /// | Agent | Port 1 (principal) | Port 2 | Port 3 |
 /// |-------|--------------------|--------|--------|
@@ -89,7 +86,9 @@ impl<'id> Agent<'id> {
     }
 
     fn unchecked_target<'a>(&'a self, port_num: PortNum) -> PortRef<'id, 'a> {
-        let t = self.ports[port_num].as_ref().expect("agent port is missing target which was expected to be present");
+        let t = self.ports[port_num]
+            .as_ref()
+            .expect("agent port is missing target which was expected to be present");
         (&t.0, t.1)
     }
 
@@ -99,11 +98,6 @@ impl<'id> Agent<'id> {
         token: &'a mut GhostToken<'id>,
         port: PortRef<'id, 'a>,
     ) -> Option<Port<'id>> {
-        debug_println!(
-            "unlinking: ({:?}, {:?})",
-            port.0.borrow(token).agent_type,
-            port.1
-        );
         port.0.borrow_mut(token).ports[port.1].take()
     }
 
@@ -123,13 +117,6 @@ impl<'id> Agent<'id> {
     /// Link the two agents at the specified ports, but do not unlink the ports first. If the ports
     /// hvae old targets and they are not relinked afterwards, behavior is undefined.
     fn unsafe_link<'a>(token: &'a mut GhostToken<'id>, p1: PortRef<'id, 'a>, p2: PortRef<'id, 'a>) {
-        debug_println!(
-            "linking: ({:?}, {:?}) to ({:?}, {:?})",
-            p1.0.borrow(token).agent_type,
-            p1.1,
-            p2.0.borrow(token).agent_type,
-            p2.1
-        );
         p1.0.borrow_mut(token).ports[p1.1] = Some((Arc::clone(p2.0), p2.1));
         p2.0.borrow_mut(token).ports[p2.1] = Some((Arc::clone(p1.0), p1.1));
     }
@@ -246,13 +233,12 @@ impl<'id> Agent<'id> {
 
     /// Apply an interaction rule to two nodes connected at their principal ports.
     /// nodes
-    fn interact_pair(
-        token: &mut GhostToken<'id>,
-        a: &AgentRef<'id>,
-    ) {
+    fn interact_pair(token: &mut GhostToken<'id>, a: &AgentRef<'id>) {
         let b = {
             // take the target of a's principle port as the second agent in the pair
-            let a_target = a.borrow_mut(token).ports[0].take().expect("found unconnected principle port during interaction");
+            let a_target = a.borrow_mut(token).ports[0]
+                .take()
+                .expect("found unconnected principle port during interaction");
             // the interaction should take place at b's principal port
             assert!(a_target.1 == 0);
             a_target.0
@@ -289,6 +275,8 @@ impl<'id> Agent<'id> {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Stats {
     pub reductions: usize,
+    pub betas: usize,
+    pub time: Duration,
 }
 
 pub struct INet<'id> {
@@ -296,21 +284,20 @@ pub struct INet<'id> {
 }
 
 impl<'id> INet<'id> {
-    pub fn compile(token: &mut GhostToken<'id>, term: &Term) -> Self {
+    pub fn compile(token: &mut GhostToken<'id>, term: &DebruijnTerm) -> Self {
         use cons_list::ConsList;
         fn new_agent<'id>(agent_type: AgentType) -> AgentRef<'id> {
             Arc::new(GhostCell::new(Agent::new(agent_type)))
         }
         fn go<'id>(
             token: &mut GhostToken<'id>,
-            term: &Term,
+            term: &DebruijnTerm,
             scope: &ConsList<PortRef<'id, '_>>,
             parent_port: PortRef<'id, '_>,
             δ_tag: &mut usize,
         ) {
             match term {
-                Term::Lam(body) => {
-                    debug_println!("translating lambda: {:?}", term);
+                DebruijnTerm::Lam(body) => {
                     let λ = new_agent(AgentType::Γ(ΓTag::Λ));
                     Agent::unsafe_link(token, (&λ, 0), parent_port);
                     // the argument should be unused by default
@@ -318,15 +305,13 @@ impl<'id> INet<'id> {
                     Agent::unsafe_link(token, (&λ, 1), (&ε, 0));
                     go(token, body, &scope.append((&λ, 1)), (&λ, 2), δ_tag);
                 }
-                Term::App(f, x) => {
-                    debug_println!("translating application: {:?}", term);
+                DebruijnTerm::App(f, x) => {
                     let app = new_agent(AgentType::Γ(ΓTag::Α));
                     Agent::unsafe_link(token, (&app, 2), parent_port);
                     go(token, f, scope, (&app, 0), δ_tag);
                     go(token, x, scope, (&app, 1), δ_tag);
                 }
-                Term::Var(n) => {
-                    debug_println!("translating var: {:?}", term);
+                DebruijnTerm::Var(n) => {
                     // bounds sanity check: scope with index 0 has length 1; if scope has length 0,
                     // then we don't have variable 0
                     if scope.len() <= *n {
@@ -366,7 +351,8 @@ impl<'id> INet<'id> {
         INet { root }
     }
 
-    pub fn decompile(&self, token: &GhostToken<'id>) -> Term {
+    // TODO: this is likely to stack overflow on large numbers, consider trampolining
+    pub fn decompile(&self, token: &GhostToken<'id>) -> DebruijnTerm {
         use cons_list::ConsList;
         fn go<'id, 'a>(
             token: &'a GhostToken<'id>,
@@ -374,7 +360,7 @@ impl<'id> INet<'id> {
             depth: usize,
             depth_map: &mut HashMap<AgentId, usize>,
             exit: &ConsList<PortNum>,
-        ) -> Term {
+        ) -> DebruijnTerm {
             let agent = port.0.borrow(token);
             depth_map.entry(agent.id).or_insert(depth);
             match agent.agent_type {
@@ -395,13 +381,13 @@ impl<'id> INet<'id> {
                             .target(2)
                             .expect("λ agent missing a body while translating inet to lambda");
                         let res = go(token, body, depth + 1, depth_map, exit);
-                        Term::Lam(Box::new(res))
+                        DebruijnTerm::Lam(Box::new(res))
                     } else if port.1 == 1 {
                         // variable
                         let first_depth: usize = *depth_map.get(&agent.id).expect(
                             "depth map missing inserted agent id while translating inet to lambda",
                         );
-                        Term::Var(depth - first_depth - 1)
+                        DebruijnTerm::Var(depth - first_depth - 1)
                     } else {
                         panic!("port 2 of a λ agent visited while translating inet to lambda");
                     }
@@ -416,7 +402,7 @@ impl<'id> INet<'id> {
                             .expect("α agent missing an argument while translating inet to lambda");
                         let f_term = go(token, f, depth, depth_map, exit);
                         let x_term = go(token, x, depth, depth_map, exit);
-                        Term::App(Box::new(f_term), Box::new(x_term))
+                        DebruijnTerm::App(Box::new(f_term), Box::new(x_term))
                     } else {
                         panic!(
                             "visited an invalid port of α agent while translating inet to lambda"
@@ -453,17 +439,23 @@ impl<'id> INet<'id> {
 
     fn reduce(&self, token: &mut GhostToken<'id>) -> Stats {
         let mut reductions = 0;
+        let mut betas = 0;
+
         let mut exit_ports = HashMap::<AgentId, PortNum>::new();
         let mut frozen_agents = HashSet::<AgentId>::new();
         // TODO: see if this can be a Vec<PortRef<'id, '_>> instead
-        let mut visit_stack = Vec::<Port<'id>>::new();
-        visit_stack.push((Arc::clone(&self.root), 1));
+        let mut visit_stack = vec![(Arc::clone(&self.root), 1)];
 
         // used so we can take references to a cloned arc and use them interchangeably
         let mut exit_target;
 
+        let time = Instant::now();
         'visit_next_node: while let Some(visit) = visit_stack.pop() {
-            let mut next = if let Some(next) = visit.0.borrow(token).target(visit.1) { next } else { continue; };
+            let mut next = if let Some(next) = visit.0.borrow(token).target(visit.1) {
+                next
+            } else {
+                continue;
+            };
             loop {
                 let next_agent = next.0.borrow(token);
                 let next_agent_id = next_agent.id;
@@ -481,12 +473,19 @@ impl<'id> INet<'id> {
                     if prev.1 == 0 {
                         // the nodes interact at the principal ports
                         reductions += 1;
+                        if matches!(prev_agent.agent_type, AgentType::Γ(_))
+                            && matches!(next_agent.agent_type, AgentType::Γ(_))
+                        {
+                            betas += 1;
+                        }
 
                         // unwrap is safe here, since we couldn't have entered prev through its
                         // principal port, so it must have been placed in exit_ports below
                         let new_exit_target = {
                             let prev_agent = prev.0.borrow(token);
-                            let exit_port_num = *exit_ports.get(&prev_agent.id).expect("agent missing exit port during interaction");
+                            let exit_port_num = *exit_ports
+                                .get(&prev_agent.id)
+                                .expect("agent missing exit port during interaction");
                             let exit_target = prev_agent.target(exit_port_num).unwrap();
                             // TODO: try to remove this if possible
                             (Arc::clone(exit_target.0), exit_target.1)
@@ -521,12 +520,17 @@ impl<'id> INet<'id> {
                 }
             }
         }
+        let time = time.elapsed();
 
-        Stats { reductions }
+        Stats {
+            reductions,
+            betas,
+            time,
+        }
     }
 }
 
-pub fn reduce_lambda(term: &Term) -> Term {
+pub fn reduce_lambda(term: &DebruijnTerm) -> DebruijnTerm {
     GhostToken::new(|mut token| {
         let net = INet::compile(&mut token, term);
         net.reduce(&mut token);
@@ -534,7 +538,7 @@ pub fn reduce_lambda(term: &Term) -> Term {
     })
 }
 
-pub fn reduce_lambda_with_stats(term: &Term) -> (Term, Stats) {
+pub fn reduce_lambda_with_stats(term: &DebruijnTerm) -> (DebruijnTerm, Stats) {
     GhostToken::new(|mut token| {
         let net = INet::compile(&mut token, term);
         let stats = net.reduce(&mut token);
