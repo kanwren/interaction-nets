@@ -17,7 +17,10 @@ fn main() {
                 Err(e) => println!("no debruijn form: {}", e),
                 Ok(x) => {
                     println!("debruijn form:\t{}", x);
-                    println!("reduced form:\t{}", inet::reduce_lambda(&x));
+                    let (reduced, stats) = inet::reduce_lambda_with_stats(&x);
+                    println!("performed {} reductions", stats.reductions);
+                    println!("reduced form:\t{}", reduced);
+                    println!("renamed:\t{}", reduced.to_named());
                 }
             }
         }
