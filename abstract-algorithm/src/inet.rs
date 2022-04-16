@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ghost_cell::{GhostCell, GhostToken};
@@ -45,7 +45,7 @@ type PortNum = usize;
 type Port<'id> = (AgentRef<'id>, PortNum);
 type PortRef<'id, 'a> = (&'a AgentRef<'id>, PortNum);
 const MAX_PORTS: usize = 3;
-type AgentRef<'id> = Arc<GhostCell<'id, Agent<'id>>>;
+type AgentRef<'id> = Rc<GhostCell<'id, Agent<'id>>>;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct AgentId(usize);
@@ -78,7 +78,7 @@ impl<'id> Agent<'id> {
     }
 
     fn new_ref(agent_type: AgentType) -> AgentRef<'id> {
-        Arc::new(GhostCell::new(Agent::new(agent_type)))
+        Rc::new(GhostCell::new(Agent::new(agent_type)))
     }
 
     fn target<'a>(&'a self, port_num: PortNum) -> Option<PortRef<'id, 'a>> {
@@ -117,8 +117,8 @@ impl<'id> Agent<'id> {
     /// Link the two agents at the specified ports, but do not unlink the ports first. If the ports
     /// hvae old targets and they are not relinked afterwards, behavior is undefined.
     fn unsafe_link<'a>(token: &'a mut GhostToken<'id>, p1: PortRef<'id, 'a>, p2: PortRef<'id, 'a>) {
-        p1.0.borrow_mut(token).ports[p1.1] = Some((Arc::clone(p2.0), p2.1));
-        p2.0.borrow_mut(token).ports[p2.1] = Some((Arc::clone(p1.0), p1.1));
+        p1.0.borrow_mut(token).ports[p1.1] = Some((Rc::clone(p2.0), p2.1));
+        p2.0.borrow_mut(token).ports[p2.1] = Some((Rc::clone(p1.0), p1.1));
     }
 
     /// Unlink all ports of an agent and destroy it
@@ -287,7 +287,7 @@ impl<'id> INet<'id> {
     pub fn compile(token: &mut GhostToken<'id>, term: &DebruijnTerm) -> Self {
         use cons_list::ConsList;
         fn new_agent<'id>(agent_type: AgentType) -> AgentRef<'id> {
-            Arc::new(GhostCell::new(Agent::new(agent_type)))
+            Rc::new(GhostCell::new(Agent::new(agent_type)))
         }
         fn go<'id>(
             token: &mut GhostToken<'id>,
@@ -346,7 +346,7 @@ impl<'id> INet<'id> {
             }
         }
         let mut δ_tag: usize = 1; // arbitrary
-        let root = Arc::new(GhostCell::new(Agent::new(AgentType::Root)));
+        let root = Rc::new(GhostCell::new(Agent::new(AgentType::Root)));
         go(token, term, &ConsList::new(), (&root, 1), &mut δ_tag);
         INet { root }
     }
@@ -444,7 +444,7 @@ impl<'id> INet<'id> {
         let mut exit_ports = HashMap::<AgentId, PortNum>::new();
         let mut frozen_agents = HashSet::<AgentId>::new();
         // TODO: see if this can be a Vec<PortRef<'id, '_>> instead
-        let mut visit_stack = vec![(Arc::clone(&self.root), 1)];
+        let mut visit_stack = vec![(Rc::clone(&self.root), 1)];
 
         // used so we can take references to a cloned arc and use them interchangeably
         let mut exit_target;
@@ -488,7 +488,7 @@ impl<'id> INet<'id> {
                                 .expect("agent missing exit port during interaction");
                             let exit_target = prev_agent.target(exit_port_num).unwrap();
                             // TODO: try to remove this if possible
-                            (Arc::clone(exit_target.0), exit_target.1)
+                            (Rc::clone(exit_target.0), exit_target.1)
                         };
 
                         // remove interacting nodes from state for GC reasons. they can't be
@@ -498,7 +498,7 @@ impl<'id> INet<'id> {
                         exit_ports.remove(&next_agent_id);
 
                         // TODO: try to remove this if possible
-                        let prev_ref = Arc::clone(prev.0);
+                        let prev_ref = Rc::clone(prev.0);
                         Agent::interact_pair(token, &prev_ref);
                         std::mem::drop(prev_ref);
 
@@ -508,8 +508,8 @@ impl<'id> INet<'id> {
                         // the next node's principal port is pointing up, but isn't interacting.
                         // it can no longer interact, so it can safely be frozen
                         frozen_agents.insert(next_agent_id);
-                        visit_stack.push((Arc::clone(next.0), 2));
-                        visit_stack.push((Arc::clone(next.0), 1));
+                        visit_stack.push((Rc::clone(next.0), 2));
+                        visit_stack.push((Rc::clone(next.0), 1));
                         continue 'visit_next_node;
                     }
                 } else {
