@@ -121,13 +121,6 @@ impl<'id> Agent<'id> {
         p2.0.borrow_mut(token).ports[p2.1] = Some((Rc::clone(p1.0), p1.1));
     }
 
-    /// Unlink all ports of an agent and destroy it
-    fn destroy<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>) {
-        for i in 0..MAX_PORTS {
-            Agent::unlink(token, (a, i));
-        }
-    }
-
     /// Link `p1` to the target of `p2`, unlinking `p2` in the process. You must verify that the
     /// old target of `p1` is unlinked.
     fn unsafe_link_to_target_of<'a>(
@@ -141,37 +134,6 @@ impl<'id> Agent<'id> {
         } else {
             Agent::unsafe_take(token, p1);
         }
-    }
-
-    /// Apply the annihilation rule to two nodes of the same type that both have arity 2 (in
-    /// particular, γ and δ) interacting at their principal ports. Does not check these
-    /// preconditions! This should be used as a helper in interactions only.
-    ///
-    /// Assumes that the principal ports have already been unlinked (by interact_pair).
-    fn annihilate2<'a>(token: &'a mut GhostToken<'id>, a: &'a AgentRef<'id>, b: &'a AgentRef<'id>) {
-        fn relink<'id, 'a>(
-            token: &'a mut GhostToken<'id>,
-            p1: PortRef<'id, 'a>,
-            p2: PortRef<'id, 'a>,
-        ) {
-            // SAFETY: p1 and p2 point to the two ports which will be relinked together
-            let a_dest: Option<Port<'id>> = Agent::unsafe_take(token, p1);
-            let b_dest: Option<Port<'id>> = Agent::unsafe_take(token, p2);
-            if let Some(a_dest1) = a_dest {
-                if let Some(b_dest1) = b_dest {
-                    // SAFETY: a_dest and b_dest used to be linked to p1 and p2, which we already
-                    // unlinked above.
-                    Agent::unsafe_link(token, (&a_dest1.0, a_dest1.1), (&b_dest1.0, b_dest1.1));
-                } else {
-                    Agent::unlink(token, (&a_dest1.0, a_dest1.1));
-                }
-            } else if let Some(b_dest1) = b_dest {
-                Agent::unlink(token, (&b_dest1.0, b_dest1.1));
-            }
-        }
-        relink(token, (a, 1), (b, 1));
-        relink(token, (a, 2), (b, 2));
-        // all ports on a, b should be unlinked
     }
 
     /// Apply the commuting rule to two nodes of different types that both have arity 2 (in
@@ -234,6 +196,26 @@ impl<'id> Agent<'id> {
     /// Apply an interaction rule to two nodes connected at their principal ports.
     /// nodes
     fn interact_pair(token: &mut GhostToken<'id>, a: &AgentRef<'id>) {
+        fn relink<'id, 'a>(
+            token: &'a mut GhostToken<'id>,
+            p1: PortRef<'id, 'a>,
+            p2: PortRef<'id, 'a>,
+        ) {
+            // SAFETY: p1 and p2 point to the two ports which will be relinked together
+            let a_dest: Option<Port<'id>> = Agent::unsafe_take(token, p1);
+            let b_dest: Option<Port<'id>> = Agent::unsafe_take(token, p2);
+            if let Some(a_dest1) = a_dest {
+                if let Some(b_dest1) = b_dest {
+                    // SAFETY: a_dest and b_dest used to be linked to p1 and p2, which we already
+                    // unlinked above.
+                    Agent::unsafe_link(token, (&a_dest1.0, a_dest1.1), (&b_dest1.0, b_dest1.1));
+                } else {
+                    Agent::unlink(token, (&a_dest1.0, a_dest1.1));
+                }
+            } else if let Some(b_dest1) = b_dest {
+                Agent::unlink(token, (&b_dest1.0, b_dest1.1));
+            }
+        }
         let b = {
             // take the target of a's principle port as the second agent in the pair
             let a_target = a.borrow_mut(token).ports[0]
@@ -247,27 +229,28 @@ impl<'id> Agent<'id> {
         let b_type = b.borrow(token).agent_type;
         match (a_type, b_type) {
             // root nodes cannot interact, since they have no principal port
-            (AgentType::Root, _) => panic!("attempted to interact with a root node"),
-            (_, AgentType::Root) => panic!("attempted to interact with a root node"),
+            (AgentType::Root, _) | (_, AgentType::Root) => panic!("attempted to interact with a root node"),
             // common agents annihilate
-            (AgentType::Γ(_), AgentType::Γ(_)) => Agent::annihilate2(token, a, &b),
+            (AgentType::Γ(_), AgentType::Γ(_)) => {
+                relink(token, (a, 1), (&b, 1));
+                relink(token, (a, 2), (&b, 2));
+            },
             (AgentType::Δ(m), AgentType::Δ(n)) => {
                 if m == n {
-                    Agent::annihilate2(token, a, &b)
+                    relink(token, (a, 1), (&b, 1));
+                    relink(token, (a, 2), (&b, 2));
                 } else {
                     Agent::commute2(token, a, &b)
                 }
             }
-            (AgentType::Ε, AgentType::Ε) => {
-                Agent::destroy(token, a);
-                Agent::destroy(token, &b)
-            }
             // γ and δ commute past each other
-            (AgentType::Γ(_), AgentType::Δ(_)) => Agent::commute2(token, a, &b),
-            (AgentType::Δ(_), AgentType::Γ(_)) => Agent::commute2(token, a, &b),
+            (AgentType::Γ(_), AgentType::Δ(_)) | (AgentType::Δ(_), AgentType::Γ(_)) => Agent::commute2(token, a, &b),
             // ε erases
-            (AgentType::Γ(_) | AgentType::Δ(_), AgentType::Ε) => Agent::erase2(token, a, &b),
-            (AgentType::Ε, AgentType::Γ(_) | AgentType::Δ(_)) => Agent::erase2(token, a, &b),
+            (AgentType::Γ(_) | AgentType::Δ(_), AgentType::Ε) | (AgentType::Ε, AgentType::Γ(_) | AgentType::Δ(_)) => Agent::erase2(token, a, &b),
+            (AgentType::Ε, AgentType::Ε) => {
+                Agent::unlink(token, (a, 0));
+                Agent::unlink(token, (&b, 0));
+            }
         }
     }
 }
