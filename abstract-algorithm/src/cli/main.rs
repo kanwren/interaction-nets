@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
-pub mod inet;
-pub mod lambda;
+use abstract_algorithm::{lambda, inet};
 
 fn disp<T: Display>(x: &T) -> String {
     const MAX_LEN: usize = 200;
@@ -51,10 +50,9 @@ fn main() {
                     }
                     println!();
                     println!(
-                        "performed {} reductions ({} betas) in {:e} seconds",
+                        "performed {} reductions ({} betas)",
                         stats.reductions,
                         stats.betas,
-                        stats.time.as_secs_f64()
                     );
                 }
             }

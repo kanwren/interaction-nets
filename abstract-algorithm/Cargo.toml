@@ -3,6 +3,14 @@ name = "abstract-algorithm"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "abstract_algorithm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "abstract_algorithm_cli"
+path = "src/cli/main.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

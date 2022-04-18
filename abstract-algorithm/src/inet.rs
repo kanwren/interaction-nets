@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 
 use ghost_cell::{GhostCell, GhostToken};
 
@@ -259,7 +258,6 @@ impl<'id> Agent<'id> {
 pub struct Stats {
     pub reductions: usize,
     pub betas: usize,
-    pub time: Duration,
 }
 
 pub struct INet<'id> {
@@ -432,7 +430,6 @@ impl<'id> INet<'id> {
         // used so we can take references to a cloned arc and use them interchangeably
         let mut exit_target;
 
-        let time = Instant::now();
         'visit_next_node: while let Some(visit) = visit_stack.pop() {
             let mut next = if let Some(next) = visit.0.borrow(token).target(visit.1) {
                 next
@@ -503,12 +500,10 @@ impl<'id> INet<'id> {
                 }
             }
         }
-        let time = time.elapsed();
 
         Stats {
             reductions,
             betas,
-            time,
         }
     }
 }
