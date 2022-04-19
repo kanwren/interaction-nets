@@ -51,7 +51,7 @@ Compute names_of_term (leaf "alpha").
 Compute names_of_term (tree 2 "alpha" << leaf "beta"; leaf "gamma" >>).
 
 (* Renaming and Substitution *)
-Reserved Notation "'[' x ':=' u ']' t" (at level 60).
+Reserved Notation "'[[' x ':=' u ']]' t" (at level 20).
 Fixpoint subst (t : term) (x : string) (u : term) : term :=
   match t with
   | leaf n =>
@@ -61,13 +61,13 @@ Fixpoint subst (t : term) (x : string) (u : term) : term :=
         t
   | tree arity agent terms =>
       tree arity agent (Vector.map (fun t =>
-        [x := u] t
+        [[x := u]] t
       ) terms)
   end
-where "'[' x ':=' u ']' t" := (subst t x u).
+where "'[[' x ':=' u ']]' t" := (subst t x u).
 
-Compute ["x" := leaf "y"] (leaf "x").
-Compute ["x" := tree 2 "x" << leaf "y"; leaf "z" >>] (
+Compute [["x" := leaf "y"]] (leaf "x").
+Compute [["x" := tree 2 "x" << leaf "y"; leaf "z" >>]] (
   tree 2 "alpha" <<
     leaf "x";
     tree 3 "beta" <<
