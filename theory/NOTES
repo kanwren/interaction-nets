@@ -1,0 +1,46 @@
+type port = int
+
+type port =
+  | Open
+  | ConnectedTo of agent
+
+and type agent =
+  { name: string;
+    mutable principal_port: port;
+    auxiliary_ports: port list
+  }
+ 
+let x = { name = "x"; principal_port = Open; auxiliary_ports = [Open; Open] }
+
+let y = { name = "y"; principal_port = Open; auxiliary_ports = [Open] }
+
+module Inet = struct
+  type inet = { terms: agent list; rules: rule list }
+
+  let create root = { terms = [root]; rules = [] }
+  
+  let connect inet x y =
+    x.principal_port <- ConnectedTo y
+    y.principal_port <- ConnectedTo x
+
+  let reduce inet =
+    let term = hd inet.terms in
+    match term.principal_port with
+    | Open -> ()
+    | ConnectedTo a ->
+      let is_valid =
+        match a.principal_port with
+        | Open -> failwith "error"
+        | ConnectedTo y -> y = term
+      in
+      if not is_valid then
+        failwith "error"
+      ;
+      apply_rule inet term a;
+      reduce inet
+end
+
+let () =
+  let inet = Inet.create () in
+  Inet.connect inet x y;
+  Inet.reduce inet
