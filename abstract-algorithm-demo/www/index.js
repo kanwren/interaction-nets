@@ -41,3 +41,15 @@ document.getElementById('lambda-code').onkeydown = (e) => {
         handleInput();
     }
 };
+
+document.getElementById('lambda-code').textContent = `// local variables can be defined with let:
+let x = 5;
+
+// number literals are just syntax sugar for Church naturals
+
+// lambdas can be defined using 'λ' or '\\':
+let add = λm n s z. m s (n s z);
+
+// the program must end in a single expression to evaluate:
+add x x
+`;
