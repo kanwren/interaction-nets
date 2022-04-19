@@ -124,13 +124,13 @@ impl NamedTerm {
     }
 
     pub fn from_nat(num: usize) -> Self {
-        let mut term = NamedTerm::Var("x".into());
+        let mut term = NamedTerm::Var("z".into());
         for _ in 0..num {
-            term = NamedTerm::App(Box::new(NamedTerm::Var("f".into())), Box::new(term));
+            term = NamedTerm::App(Box::new(NamedTerm::Var("s".into())), Box::new(term));
         }
         term = NamedTerm::Lam(
-            "f".into(),
-            Box::new(NamedTerm::Lam("x".into(), Box::new(term))),
+            "s".into(),
+            Box::new(NamedTerm::Lam("z".into(), Box::new(term))),
         );
         term
     }
