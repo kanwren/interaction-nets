@@ -1,4 +1,5 @@
 Require Import Coq.Strings.String.
+Require Import Coq.Relations.Relation_Definitions.
 Require Vector.
 Import List.ListNotations.
 From Inet Require Import Map.
@@ -49,6 +50,15 @@ Compute names_of_term (leaf "alpha").
 Compute names_of_term (tree 2 "alpha" << leaf "beta"; leaf "gamma" >>).
 
 (* TODO Renaming and Substitution *)
+
+(* Rules *)
+Axiom rule : relation term.
+Definition interacts_with (t1 : term) (t2 : term) : Prop := rule t1 t1.
+
+Notation "t1 '⋈' t2" := (interacts_with t1 t2) (at level 60, right associativity).
+
+Check (leaf "alpha") ⋈ (leaf "beta").
+Check (tree 2 "alpha" << leaf "beta"; leaf "gamma" >>) ⋈ (leaf "beta").
 
 (* Equations *)
 Definition eqn (X : Type) : Type := X -> X -> Prop.
