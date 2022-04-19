@@ -36,3 +36,8 @@ function handleInput() {
 }
 
 document.getElementById('reduce-button').onclick = () => handleInput();
+document.getElementById('lambda-code').onkeydown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.keyCode == 13 || e.keyCode == 10)) {
+        handleInput();
+    }
+};
