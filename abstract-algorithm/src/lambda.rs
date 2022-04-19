@@ -46,7 +46,7 @@ impl NamedTerm {
                 map(identifier, NamedTerm::Var)(i)
             }
             fn nat(i: &str) -> IResult<&str, NamedTerm> {
-                map(preceded(char('#'), decimal), NamedTerm::from_nat)(i)
+                map(preceded(opt(char('#')), decimal), NamedTerm::from_nat)(i)
             }
             fn lambda(i: &str) -> IResult<&str, NamedTerm> {
                 let (i, _) = one_of("λ\\")(i)?;
