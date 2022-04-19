@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Interaction Nets</title>
+  </head>
+  <body>
+    <noscript>This page contains webassembly and javascript content, please enable javascript in your browser.</noscript>
+    <div style="display: flex; margin: 10px;">
+      <div style="width: 50%; height: 100%;">
+        <textarea id="lambda-code" style="width: 90%; height: 100%; font-size: 16px;" rows=30></textarea>
+        <button id="reduce-button" style="display: block; font-size: 18px;">Reduce</button>
+        <p id="reductions-report"></p>
+      </div>
+      <div style="width: 50%; height: 100%;">
+        <p>Input (named):</p>
+        <pre id="input-named" style="white-space: pre-wrap; width: 100%; min-height: 50px; box-shadow: inset 1px 1px 1px gray; padding: 2px; background: lightgray; border: 1px black solid; font-size: 16px; line-height: 1.4;"></pre>
+        <p>Input (DeBruijn):</p>
+        <pre id="input-db" style="white-space: pre-wrap; width: 100%; min-height: 50px; box-shadow: inset 1px 1px 1px gray; padding: 2px; background: lightgray; border: 1px black solid; font-size: 16px; line-height: 1.4;"></pre>
+        <p>Reduced result (DeBruijn):</p>
+        <pre id="reduced-db" style="white-space: pre-wrap; width: 100%; min-height: 50px; box-shadow: inset 1px 1px 1px gray; padding: 2px; background: lightgray; border: 1px black solid; font-size: 16px; line-height: 1.4;"></pre>
+        <p>Reduced result (named):</p>
+        <pre id="reduced-named" style="white-space: pre-wrap; width: 100%; min-height: 50px; box-shadow: inset 1px 1px 1px gray; padding: 2px; background: lightgray; border: 1px black solid; font-size: 16px; line-height: 1.4;"></pre>
+        <p>Numeric result:</p>
+        <pre id="numeric-result" style="white-space: pre-wrap; width: 100%; min-height: 50px; box-shadow: inset 1px 1px 1px gray; padding: 2px; background: lightgray; border: 1px black solid; font-size: 16px; line-height: 1.4;"></pre>
+      </div>
+    </div>
+    <script src="./bootstrap.js"></script>
+  </body>
+</html>
