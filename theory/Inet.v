@@ -94,10 +94,14 @@ Notation "t1 '⋈' t2" := (interacts_with t1 t2) (at level 60, right associativi
 Check (leaf "alpha") ⋈ (leaf "beta").
 Check (tree "alpha" << leaf "beta"; leaf "gamma" >>) ⋈ (leaf "beta").
   
-(* Define some agents *)
+(* Define some terms *)
 Definition x := leaf "x".
 Definition y := leaf "y".
 Definition t := leaf "t".
+
+(* Define some agents *)
+(* Note: The steps_to relation only supports interaction between trees.
+ * Therefore any agent must be defined as a tree. "O", for example, is defined as a tree that takes in zero terms (the empty vector) *)
 Definition O := tree "O" (<<>>).
 Definition S (n : term) := tree "S" <<n>>.
 Definition add (x : term) (y : term) := tree "add" << x ; y >>.
@@ -119,6 +123,9 @@ Record net := mknet {
   iface : list term;
   eqns  : list eqn;
 }.
+Notation "'<%' iface | eqns '%>'" := (
+    {| iface := iface; eqns := eqns |}
+  ) (at level 60, right associativity).
 
 Reserved Notation "n '-->' n'" (at level 40).
 
@@ -126,28 +133,16 @@ Inductive steps_to : net -> net -> Prop :=
   | interaction :
       forall m n a b xs xs' ys ys' Γ iface,
       @tree m a xs ⋈ @tree n b ys ->
-      {| iface := iface;
-         eqns  := (@tree m a xs', @tree n b ys') :: Γ
-      |} -->
-      {| iface := iface;
-         eqns := (xs <*> xs') ++ (ys <*> ys') ++ Γ
-      |}
+      <% iface | (@tree m a xs', @tree n b ys') :: Γ %> -->
+      <% iface | (xs <*> xs') ++ (ys <*> ys') ++ Γ %>
   | indirection :
       forall x u v t Γ iface,
       List.In x (names_of_term u) ->
-      {| iface := iface;
-         eqns := [(leaf x, t); (u, v)] ++ Γ
-      |} -->
-      {| iface := iface;
-         eqns := [([[x := t]] u, v)] ++ Γ
-      |}
+      <% iface | [(leaf x, t); (u, v)] ++ Γ %> -->
+      <% iface | [([[x := t]] u, v)] ++ Γ %>
   | collect :
       forall x u Γ iface,
       List.In x (names_of_terms iface) ->
-      {| iface := iface;
-         eqns := (leaf x,u) :: Γ
-      |} -->
-      {| iface := List.map (fun t => [[x := u]] t) iface;
-         eqns := Γ
-      |}
+      <% iface | (leaf x,u) :: Γ %> -->
+      <% List.map (fun t => [[x := u]] t) iface | Γ %>
 where "n '-->' n'" := (steps_to n n').
