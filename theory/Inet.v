@@ -52,6 +52,9 @@ Fixpoint names_of_term (t : term) : list string :=
 Compute names_of_term (leaf "alpha").
 Compute names_of_term (tree "alpha" << leaf "beta"; leaf "gamma" >>).
 
+Definition names_of_terms (ts : list term) : list string :=
+  List.flat_map names_of_term ts.
+
 (* Renaming and Substitution *)
 Reserved Notation "'[[' x ':=' u ']]' t" (at level 20).
 Fixpoint subst (t : term) (x : string) (u : term) : term :=
@@ -102,10 +105,6 @@ Definition add (x : term) (y : term) := tree "add" << x ; y >>.
 Definition add_O := O ⋈ add y y.
 Definition add_S := S (add y t) ⋈ add y (S t).
 
-Inductive unify : term -> term -> Prop :=
-  | goal : forall t1 t2, unify t1 t2.
-Notation "t1 ~= t2" := (unify t1 t2) (at level 60, right associativity).
-
 Definition eqn : Type := term * term.
 
 Fixpoint combine_vecs_to_list {X : Type} {n : nat} (a : VectorDef.t X n)
@@ -116,27 +115,39 @@ Fixpoint combine_vecs_to_list {X : Type} {n : nat} (a : VectorDef.t X n)
 
 Notation "xs <*> ys" := (combine_vecs_to_list xs ys) (at level 60, right associativity).
 
-Inductive steps_to : list eqn -> list eqn -> Prop :=
-  | interaction :
-      forall m n a b xs xs' ys ys' (Γ : list eqn),
-      @tree m a xs ⋈ @tree n b ys ->
-      @tree m a xs' ~= @tree n b ys' ->
-      steps_to ((@tree m a xs', @tree n b ys') :: Γ)
-      ((xs <*> xs') ++ (ys <*> ys') ++ Γ).
+Record net := mknet {
+  iface : list term;
+  eqns  : list eqn;
+}.
 
-Lemma steps_to_example : 
-  add_O ->
-  O ~= add (leaf "1") (leaf "1") ->
-  steps_to 
-    [(O, add (leaf "1") (leaf "1"))]
-    (
-      (<<>> <*> <<>>) ++
-      (<<leaf "y"; leaf "y">> <*> <<leaf "1"; leaf "1">>) ++
-      []
-    ).
-Proof.
-  intros.
-  apply interaction.
-  - unfold add_O in H. apply H.
-  - apply H0.
-Qed.
+Reserved Notation "n '-->' n'" (at level 40).
+
+Inductive steps_to : net -> net -> Prop :=
+  | interaction :
+      forall m n a b xs xs' ys ys' Γ iface,
+      @tree m a xs ⋈ @tree n b ys ->
+      {| iface := iface;
+         eqns  := (@tree m a xs', @tree n b ys') :: Γ
+      |} -->
+      {| iface := iface;
+         eqns := (xs <*> xs') ++ (ys <*> ys') ++ Γ
+      |}
+  | indirection :
+      forall x u v t Γ iface,
+      List.In x (names_of_term u) ->
+      {| iface := iface;
+         eqns := [(leaf x, t); (u, v)] ++ Γ
+      |} -->
+      {| iface := iface;
+         eqns := [([[x := t]] u, v)] ++ Γ
+      |}
+  | collect :
+      forall x u Γ iface,
+      List.In x (names_of_terms iface) ->
+      {| iface := iface;
+         eqns := (leaf x,u) :: Γ
+      |} -->
+      {| iface := List.map (fun t => [[x := u]] t) iface;
+         eqns := Γ
+      |}
+where "n '-->' n'" := (steps_to n n').
