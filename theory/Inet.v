@@ -1,8 +1,8 @@
 Require Import Coq.Strings.String.
 Require Import Coq.Relations.Relation_Definitions.
+Require Import Coq.Sorting.Permutation.
 Require Vector.
 Import List.ListNotations.
-From Inet Require Import Map.
 
 Open Scope string_scope.
 Open Scope list_scope.
@@ -55,6 +55,9 @@ Compute names_of_term (tree "alpha" << leaf "beta"; leaf "gamma" >>).
 Definition names_of_terms (ts : list term) : list string :=
   List.flat_map names_of_term ts.
 
+Definition eqb_string (x y : string) : bool :=
+  if string_dec x y then true else false.
+
 (* Renaming and Substitution *)
 Reserved Notation "'[[' x ':=' u ']]' t" (at level 20).
 Fixpoint subst (t : term) (x : string) (u : term) : term :=
@@ -88,7 +91,10 @@ Compute [["x" :=  [["y" := leaf "v"]] leaf "u"]] (leaf "y").
 
 (* Rules *)
 Inductive interacts_with : term -> term -> Prop :=
-  | rule : forall t1 t2, interacts_with t1 t2.
+  | rule : forall t1 t2, interacts_with t1 t2
+  | interacts_with_symm : 
+      forall t1 t2,
+      interacts_with t1 t2 -> interacts_with t2 t1.
 Notation "t1 '⋈' t2" := (interacts_with t1 t2) (at level 60, right associativity).
 
 Check (leaf "alpha") ⋈ (leaf "beta").
@@ -97,7 +103,9 @@ Check (tree "alpha" << leaf "beta"; leaf "gamma" >>) ⋈ (leaf "beta").
 (* Define some terms *)
 Definition x := leaf "x".
 Definition y := leaf "y".
+Definition z := leaf "z".
 Definition t := leaf "t".
+Definition a := leaf "a".
 
 (* Define some agents *)
 (* Note: The steps_to relation only supports interaction between trees.
@@ -106,10 +114,35 @@ Definition O := tree "O" (<<>>).
 Definition S (n : term) := tree "S" <<n>>.
 Definition add (x : term) (y : term) := tree "add" << x ; y >>.
 
-Definition add_O := O ⋈ add y y.
-Definition add_S := S (add y t) ⋈ add y (S t).
+Definition add_O := add x x ⋈ O.
+Definition add_S := add (S x) y ⋈ S (add x y).
+
+(* Define multi step relation *)
+Inductive multi {X : Type} (R : relation X) : relation X :=
+  | multi_refl : forall x, multi R x x
+  | multi_step :
+      forall x y z,
+      R x y ->
+      multi R y z ->
+      multi R x z.
 
 Definition eqn : Type := term * term.
+
+Inductive eqns_equiv : list eqn -> list eqn -> Prop :=
+  | eqns_perm :
+      forall xs ys,
+      Permutation xs ys -> eqns_equiv xs ys
+  | eqn_symm :
+      forall x y xs,
+      eqns_equiv ((x,y) :: xs) ((y,x) :: xs).
+Notation "xs ≡ ys" := (eqns_equiv xs ys) (at level 60, right associativity).
+Notation "xs ≡* ys" := ((multi eqns_equiv) xs ys) (at level 60, right associativity).
+
+Example eqn_equiv_example: [(x, y); (z, t)] ≡ [(z, t); (x, y)].
+Proof.
+  apply eqns_perm.
+  apply perm_swap.
+Qed.
 
 Fixpoint combine_vecs_to_list {X : Type} {n : nat} (a : VectorDef.t X n)
   (b : VectorDef.t X n) :=
@@ -128,7 +161,6 @@ Notation "'<%' iface | eqns '%>'" := (
   ) (at level 60, right associativity).
 
 Reserved Notation "n '-->' n'" (at level 40).
-
 Inductive steps_to : net -> net -> Prop :=
   | interaction :
       forall m n a b xs xs' ys ys' Γ iface,
@@ -145,4 +177,81 @@ Inductive steps_to : net -> net -> Prop :=
       List.In x (names_of_terms iface) ->
       <% iface | (leaf x,u) :: Γ %> -->
       <% List.map (fun t => [[x := u]] t) iface | Γ %>
+  | multiset :
+      forall t1 t2 Θ Θ' Δ Δ',
+      Θ ≡* Θ' ->
+      (<% t1 | Θ' %> --> <% t2 | Δ' %>) ->
+      Δ' ≡* Δ ->
+      (<% t1 | Θ %> --> <% t2 | Δ %>)
 where "n '-->' n'" := (steps_to n n').
+
+Notation "n '-->*' n'" := ((multi steps_to) n n') (at level 40).
+
+Lemma steps_to_example :
+  add_O -> add_S ->
+  <% [ a ] | [(add a O, S O)] %> -->*
+  <% [S O] | [] %>.
+Proof.
+  intros H1 H2.
+  eapply multi_step.
+  apply interaction.
+  apply H2.
+  simpl.
+  eapply multi_step.
+  - apply multiset with
+      (Θ' := [(y, O); (add x y, O); (S x, a)])
+      (Δ' := [([["y" := O]] (add x y), O); (S x, a)]).
+    + eapply multi_step.
+      apply eqns_perm.
+      apply perm_swap.
+      eapply multi_step.
+      apply eqns_perm.
+      apply perm_skip.
+      apply perm_swap.
+      apply multi_refl.
+    + change [(y, O); (add x y, O); (S x, a)] with 
+        ([(y, O); (add x y, O)] ++ [(S x, a)]).
+      change [([["x" := y]] add x y, O); (S x, a)] with
+        ([([["x" := y]] add x y, O)] ++ [(S x, a)]).
+      apply indirection.
+      simpl.
+      right.
+      left.
+      reflexivity.
+    + apply multi_refl.
+  - eapply multi_step.
+    apply multiset with
+      (Θ' := [(a, S x); ([["y" := O]] (add x y), O) ])
+      (Δ' := [(add x O, O)]).
+    + eapply multi_step.
+      apply eqns_perm.
+      apply perm_swap.
+      eapply multi_step.
+      apply eqn_symm.
+      apply multi_refl.
+    + apply collect with (Γ := [([["y" := O]] add x y, O)]). 
+      simpl.
+      left.
+      reflexivity.
+    + apply multi_refl.
+    + simpl.
+      eapply multi_step.
+      apply interaction.
+      apply H1.
+      simpl.
+      eapply multi_step.
+      apply indirection.
+      simpl.
+      left. reflexivity.
+      simpl.
+      eapply multi_step.
+      apply collect.
+      simpl.
+      left. reflexivity.
+      simpl.
+      eapply multi_refl.
+Qed.
+      
+      
+    
+    
