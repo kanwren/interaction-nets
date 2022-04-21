@@ -267,9 +267,6 @@ pub struct INet<'id> {
 impl<'id> INet<'id> {
     pub fn compile(token: &mut GhostToken<'id>, term: &DebruijnTerm) -> Self {
         use cons_list::ConsList;
-        fn new_agent<'id>(agent_type: AgentType) -> AgentRef<'id> {
-            Rc::new(GhostCell::new(Agent::new(agent_type)))
-        }
         fn go<'id>(
             token: &mut GhostToken<'id>,
             term: &DebruijnTerm,
@@ -279,15 +276,15 @@ impl<'id> INet<'id> {
         ) {
             match term {
                 DebruijnTerm::Lam(body) => {
-                    let λ = new_agent(AgentType::Γ(ΓTag::Λ));
+                    let λ = Agent::new_ref(AgentType::Γ(ΓTag::Λ));
                     Agent::unsafe_link(token, (&λ, 0), parent_port);
                     // the argument should be unused by default
-                    let ε = new_agent(AgentType::Ε);
+                    let ε = Agent::new_ref(AgentType::Ε);
                     Agent::unsafe_link(token, (&λ, 1), (&ε, 0));
                     go(token, body, &scope.append((&λ, 1)), (&λ, 2), δ_tag);
                 }
                 DebruijnTerm::App(f, x) => {
-                    let app = new_agent(AgentType::Γ(ΓTag::Α));
+                    let app = Agent::new_ref(AgentType::Γ(ΓTag::Α));
                     Agent::unsafe_link(token, (&app, 2), parent_port);
                     go(token, f, scope, (&app, 0), δ_tag);
                     go(token, x, scope, (&app, 1), δ_tag);
@@ -309,7 +306,7 @@ impl<'id> INet<'id> {
                         // SAFETY: parent port is unlinked
                         Agent::unsafe_link(token, λ, parent_port);
                     } else {
-                        let δ = new_agent(AgentType::Δ(*δ_tag));
+                        let δ = Agent::new_ref(AgentType::Δ(*δ_tag));
                         *δ_tag += 1;
                         // SAFETY: (dup, 0) is unlinked by default
                         // SAFETY: abs was unlinked before matching
